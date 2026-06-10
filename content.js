@@ -702,7 +702,10 @@
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "cgpt-thread-toggle";
-    toggle.textContent = (panelOpen ? "Hide" : "Thread") + ": " + active.title;
+    const toggleLabel = document.createElement("span");
+    toggleLabel.className = "cgpt-thread-toggle-label";
+    toggleLabel.textContent = panelOpen ? "Hide" : "Thread";
+    toggle.append(toggleLabel, threadTitleElement(active));
     toggle.addEventListener("click", () => {
       panelOpen = !panelOpen;
       renderPanel();
@@ -790,15 +793,36 @@
     button.style.paddingLeft = 8 + depth * 14 + "px";
     button.addEventListener("click", () => activateThread(threadId));
 
-    const title = document.createElement("span");
-    title.className = "cgpt-thread-title";
-    title.textContent = thread.title;
-    button.append(title);
+    button.append(threadTitleElement(thread));
     root.append(button);
 
     if (threadId !== MAIN) {
       thread.childrenThreadIds.forEach((childId) => renderThreadRow(root, childId, depth + 1));
     }
+  }
+
+  function threadTitleElement(thread) {
+    const match = thread.id !== MAIN && thread.title.match(/^\[([^\]]+)]\s*(.*)$/);
+    if (!match) {
+      const title = document.createElement("span");
+      title.className = "cgpt-thread-title";
+      title.textContent = thread.title;
+      return title;
+    }
+
+    const title = document.createElement("span");
+    title.className = "cgpt-thread-title cgpt-thread-title-two-line";
+
+    const source = document.createElement("span");
+    source.className = "cgpt-thread-source";
+    source.textContent = "[" + match[1] + "]";
+
+    const question = document.createElement("span");
+    question.className = "cgpt-thread-question";
+    question.textContent = match[2] || "Thread";
+
+    title.append(source, question);
+    return title;
   }
 
   function updatePanelBottom() {
