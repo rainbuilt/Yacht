@@ -292,18 +292,30 @@
   }
 
   function startAskInThread(nativeButton, selection) {
+    let liveAnchor = null;
+    let liveRange = null;
     if (selection) {
-      selection.sourceAnchorId = findOrCreateAnchor(selection).id;
+      const anchor = findOrCreateAnchor(selection);
+      liveAnchor = anchor;
+      liveRange = selection.range;
       state.pending = {
         phase: "waiting-user-turn",
         parentThreadId: state.activeThreadId || MAIN,
-        selection
+        selection: {
+          selectedText: selection.selectedText,
+          normalizedSelectedText: selection.normalizedSelectedText,
+          sourceTurnKey: selection.sourceTurnKey,
+          sourceThreadId: selection.sourceThreadId,
+          occurrenceIndex: selection.occurrenceIndex,
+          sourceAnchorId: anchor.id
+        }
       };
       saveSoon();
     }
     forwardingAskClick = true;
     nativeButton.click();
     forwardingAskClick = false;
+    if (liveAnchor && liveRange) setTimeout(() => wrapLiveRange(liveRange, liveAnchor), 0);
     scheduleScan();
     setTimeout(scheduleScan, 60);
     setTimeout(scheduleScan, 400);
@@ -328,7 +340,8 @@
       normalizedSelectedText: normalize(selectedText),
       sourceTurnKey: entry.key,
       sourceThreadId: threadFor(entry) || state.activeThreadId || MAIN,
-      occurrenceIndex: occurrenceIndex(source, selectedText, range)
+      occurrenceIndex: occurrenceIndex(source, selectedText, range),
+      range: range.cloneRange()
     };
   }
 
@@ -378,6 +391,27 @@
     if (section.querySelector('[data-cgpt-anchor-id="' + anchor.id + '"]')) return;
     const pieces = findTextPieces(section, anchor.selectedText, anchor.occurrenceIndex);
     if (!pieces.length) return;
+
+    [...pieces].reverse().forEach((piece) => wrapTextPiece(piece, anchor));
+  }
+
+  function wrapLiveRange(range, anchor) {
+    const section = range && (
+      closestTurn(range.commonAncestorContainer)
+      || closestTurn(range.startContainer)
+      || closestTurn(range.endContainer)
+    );
+    if (!section || section.querySelector('[data-cgpt-anchor-id="' + anchor.id + '"]')) return;
+
+    const pieces = textNodes(section)
+      .filter((node) => range.intersectsNode(node))
+      .map((node) => ({
+        node,
+        index: node === range.startContainer ? range.startOffset : 0,
+        length: (node === range.endContainer ? range.endOffset : node.nodeValue.length)
+          - (node === range.startContainer ? range.startOffset : 0)
+      }))
+      .filter((piece) => piece.length > 0);
 
     [...pieces].reverse().forEach((piece) => wrapTextPiece(piece, anchor));
   }
