@@ -66,8 +66,7 @@
           parentThreadId: null,
           childrenThreadIds: [],
           sourceAnchorId: null,
-          turnIds: [],
-          status: "active"
+          turnIds: []
         }
       },
       anchors: {},
@@ -189,7 +188,6 @@
 
     if (pending.phase === "waiting-assistant-turn" && entry.role === "assistant") {
       state.pending = null;
-      thread.status = "active";
       return thread.id;
     }
 
@@ -215,12 +213,11 @@
       parentThreadId,
       childrenThreadIds: [],
       sourceAnchorId: anchor.id,
-      turnIds: [],
-      status: "active"
+      turnIds: []
     };
     state.threads[parentThreadId].childrenThreadIds.push(threadId);
     anchor.childThreadIds.push(threadId);
-    state.pending = { threadId, phase: "waiting-assistant-turn", createdAt: Date.now() };
+    state.pending = { threadId, phase: "waiting-assistant-turn" };
     state.activeThreadId = threadId;
 
     const thread = state.threads[threadId];
@@ -299,8 +296,7 @@
     state.pending = {
       phase: "waiting-user-turn",
       parentThreadId: state.activeThreadId || MAIN,
-      selection,
-      createdAt: Date.now()
+      selection
     };
     saveSoon();
     nativeButton.click();
@@ -399,69 +395,56 @@
 
   function findTextPieces(root, text, wantedIndex) {
     const nodes = textNodes(root);
-    const fullText = nodes.map((node) => node.nodeValue).join("");
-    const start = nthIndexOf(fullText, text, wantedIndex) ?? fullText.indexOf(text);
-    if (start < 0) return normalizedTextPieces(nodes, text, wantedIndex);
-
-    const end = start + text.length;
-    let offset = 0;
-    const pieces = [];
-    nodes.forEach((node) => {
-      const next = offset + node.nodeValue.length;
-      const from = Math.max(start, offset);
-      const to = Math.min(end, next);
-      if (from < to) pieces.push({ node, index: from - offset, length: to - from });
-      offset = next;
-    });
-    return pieces;
+    return piecesFromIndex(textIndex(nodes), text, wantedIndex)
+      || piecesFromIndex(textIndex(nodes, true), normalize(text), wantedIndex)
+      || [];
   }
 
-  function normalizedTextPieces(nodes, text, wantedIndex) {
-    const normalized = normalizedTextMap(nodes);
-    const needle = normalize(text);
-    const start = nthIndexOf(normalized.text, needle, wantedIndex) ?? normalized.text.indexOf(needle);
-    if (start < 0) return [];
+  function textIndex(nodes, collapseSpaces = false) {
+    let text = "";
+    const map = [];
+    let lastWasSpace = true;
 
-    const selected = normalized.map.slice(start, start + needle.length);
-    const pieces = [];
-    selected.forEach((item) => {
+    const add = (node, index, char) => {
+      text += char;
+      map.push({ node, index });
+    };
+
+    nodes.forEach((node) => {
+      for (let index = 0; index < node.nodeValue.length; index += 1) {
+        const char = node.nodeValue[index];
+        if (collapseSpaces && /\s/.test(char)) {
+          if (!lastWasSpace) {
+            add(node, index, " ");
+            lastWasSpace = true;
+          }
+          continue;
+        }
+        add(node, index, char);
+        lastWasSpace = false;
+      }
+    });
+
+    if (collapseSpaces && text.endsWith(" ")) {
+      text = text.slice(0, -1);
+      map.pop();
+    }
+    return { text, map };
+  }
+
+  function piecesFromIndex(index, needle, wantedIndex) {
+    const start = nthIndexOf(index.text, needle, wantedIndex) ?? index.text.indexOf(needle);
+    if (start < 0) return null;
+
+    return index.map.slice(start, start + needle.length).reduce((pieces, item) => {
       const last = pieces[pieces.length - 1];
       if (last?.node === item.node && last.index + last.length === item.index) {
         last.length += 1;
       } else {
         pieces.push({ node: item.node, index: item.index, length: 1 });
       }
-    });
-    return pieces;
-  }
-
-  function normalizedTextMap(nodes) {
-    let text = "";
-    const map = [];
-    let lastWasSpace = true;
-
-    nodes.forEach((node) => {
-      for (let index = 0; index < node.nodeValue.length; index += 1) {
-        const char = node.nodeValue[index];
-        if (/\s/.test(char)) {
-          if (!lastWasSpace) {
-            text += " ";
-            map.push({ node, index });
-            lastWasSpace = true;
-          }
-          return;
-        }
-        text += char;
-        map.push({ node, index });
-        lastWasSpace = false;
-      }
-    });
-
-    if (text.endsWith(" ")) {
-      text = text.slice(0, -1);
-      map.pop();
-    }
-    return { text, map };
+      return pieces;
+    }, []);
   }
 
   function nthIndexOf(text, needle, wantedIndex) {
@@ -676,7 +659,6 @@
     button.type = "button";
     button.className = "cgpt-thread-row" + (threadId === state.activeThreadId ? " is-active" : "");
     button.style.paddingLeft = 8 + depth * 14 + "px";
-    button.dataset.threadId = threadId;
     button.addEventListener("click", () => activateThread(threadId));
 
     const title = document.createElement("span");
