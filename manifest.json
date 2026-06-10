@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Yacht - Yet another chatgpt helper tool",
+  "version": "0.1.0",
+  "description": "Adds visual nested subthreads to ChatGPT using the native Ask ChatGPT flow.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
