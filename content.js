@@ -2,7 +2,7 @@
   const MAIN = "main";
   const TURN_SELECTOR = "section[data-turn]";
   const WRAPPER_SELECTOR = "[data-turn-id-container]";
-  const BUTTON_ATTR = "data-cgpt-thread-button";
+  const BUTTON_ATTR = "data-cgpt-thread-hooked";
   const HIDDEN = "cgpt-thread-hidden";
   const CLIP = 40;
 
@@ -15,6 +15,8 @@
   let panelOpen = false;
   let lastPath = location.pathname;
   let lastSelection = null;
+  let forwardingAskClick = false;
+  let anchorPointer = null;
 
   init();
 
@@ -29,6 +31,9 @@
     document.addEventListener("selectionchange", scheduleScan);
     document.addEventListener("mouseup", scheduleScan);
     document.addEventListener("touchend", scheduleScan);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("pointermove", onPointerMove, true);
+    document.addEventListener("pointerup", onPointerUp, true);
     document.addEventListener("click", onDocumentClick, true);
     document.addEventListener("keydown", onDocumentKeydown, true);
     window.addEventListener("resize", updatePanelBottom);
@@ -91,7 +96,7 @@
     repairReloadedReplies(entries);
     applyVisibility(entries);
     applyAnchors(entries);
-    ensureAskInThreadButtons();
+    hookAskChatGptButtons();
     renderPanel();
   }
 
@@ -209,7 +214,7 @@
 
     state.threads[threadId] = {
       id: threadId,
-      title: clip(selection.selectedText),
+      title: "[" + clip(selection.selectedText, 24) + "] Thread",
       parentThreadId,
       childrenThreadIds: [],
       sourceAnchorId: anchor.id,
@@ -245,13 +250,17 @@
   }
 
   function titleFromUserTurn(entry, thread) {
-    const source = normalize(state.anchors[thread.sourceAnchorId]?.selectedText || "");
-    let text = normalize(entry.section.querySelector('[data-testid="collapsible-user-message-content"]')?.innerText
+    const rawSource = normalize(state.anchors[thread.sourceAnchorId]?.selectedText || "");
+    const source = clip(rawSource, 24);
+    let question = userTurnText(entry);
+    if (rawSource && question.startsWith(rawSource)) question = normalize(question.slice(rawSource.length));
+    return "[" + source + "] " + clip(question, 36);
+  }
+
+  function userTurnText(entry) {
+    return normalize(entry.section.querySelector('[data-testid="collapsible-user-message-content"]')?.innerText
       || entry.section.querySelector(".user-message-bubble-color")?.innerText
-      || entry.section.innerText);
-    text = text.replace(/^You said:\s*/i, "");
-    if (source && text.startsWith(source)) text = normalize(text.slice(source.length));
-    return clip(text);
+      || entry.section.innerText).replace(/^You said:\s*/i, "");
   }
 
   function applyVisibility(entries) {
@@ -262,44 +271,39 @@
     });
   }
 
-  function ensureAskInThreadButtons() {
+  function hookAskChatGptButtons() {
     [...document.querySelectorAll("button")].forEach((nativeButton) => {
       if (nativeButton.hasAttribute(BUTTON_ATTR)) return;
       if (!buttonLabel(nativeButton).includes("Ask ChatGPT")) return;
       if (!isVisible(nativeButton) || nativeButton.closest(".cgpt-thread-panel")) return;
 
-      const parent = nativeButton.parentElement;
-      if (!parent || parent.querySelector("[" + BUTTON_ATTR + "]")) return;
-
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = "Ask in Thread";
-      button.className = "cgpt-thread-ask";
-      button.setAttribute(BUTTON_ATTR, "true");
-      button.addEventListener("mousedown", (event) => {
+      nativeButton.setAttribute(BUTTON_ATTR, "true");
+      nativeButton.addEventListener("mousedown", () => {
         lastSelection = captureSelection();
-        event.preventDefault();
       });
-      button.addEventListener("click", (event) => {
+      nativeButton.addEventListener("click", (event) => {
+        if (forwardingAskClick) return;
         event.preventDefault();
         event.stopPropagation();
         startAskInThread(nativeButton, lastSelection || captureSelection());
         lastSelection = null;
-      });
-      nativeButton.insertAdjacentElement("afterend", button);
+      }, true);
     });
   }
 
   function startAskInThread(nativeButton, selection) {
-    if (!selection) return;
-    selection.sourceAnchorId = findOrCreateAnchor(selection).id;
-    state.pending = {
-      phase: "waiting-user-turn",
-      parentThreadId: state.activeThreadId || MAIN,
-      selection
-    };
-    saveSoon();
+    if (selection) {
+      selection.sourceAnchorId = findOrCreateAnchor(selection).id;
+      state.pending = {
+        phase: "waiting-user-turn",
+        parentThreadId: state.activeThreadId || MAIN,
+        selection
+      };
+      saveSoon();
+    }
+    forwardingAskClick = true;
     nativeButton.click();
+    forwardingAskClick = false;
     scheduleScan();
     setTimeout(scheduleScan, 60);
     setTimeout(scheduleScan, 400);
@@ -383,9 +387,7 @@
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         if (!node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-        if (node.parentElement?.closest(".cgpt-thread-anchor, script, style, textarea")) {
-          return NodeFilter.FILTER_REJECT;
-        }
+        if (node.parentElement?.closest("script, style, textarea")) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
@@ -498,9 +500,15 @@
     const target = asElement(event.target);
     const anchorElement = target?.closest(".cgpt-thread-anchor");
     if (anchorElement) {
+      if (anchorPointer?.suppressClick || window.getSelection()?.toString().trim()) {
+        anchorPointer = null;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
-      openAnchor(anchorElement);
+      openAnchorStack(anchorElement);
       return;
     }
 
@@ -509,30 +517,59 @@
     if (button) maybeHandleNativeContextButton(event, button);
   }
 
+  function onPointerDown(event) {
+    const anchor = asElement(event.target)?.closest(".cgpt-thread-anchor");
+    anchorPointer = anchor ? { x: event.clientX, y: event.clientY, moved: false } : null;
+  }
+
+  function onPointerMove(event) {
+    if (!anchorPointer) return;
+    const dx = Math.abs(event.clientX - anchorPointer.x);
+    const dy = Math.abs(event.clientY - anchorPointer.y);
+    if (dx > 3 || dy > 3) anchorPointer.moved = true;
+  }
+
+  function onPointerUp() {
+    if (!anchorPointer) return;
+    anchorPointer.suppressClick = anchorPointer.moved || !!window.getSelection()?.toString().trim();
+  }
+
   function onDocumentKeydown(event) {
     if (event.key !== "Enter" && event.key !== " ") return;
     const anchorElement = asElement(event.target)?.closest(".cgpt-thread-anchor");
     if (!anchorElement) return;
     event.preventDefault();
-    openAnchor(anchorElement);
+    openAnchorStack(anchorElement);
   }
 
-  function openAnchor(anchorElement) {
-    const anchor = state.anchors[anchorElement.dataset.cgptAnchorId];
-    if (!anchor) return;
-    if (!anchor.childThreadIds.length) return;
-    if (anchor.childThreadIds.length === 1) {
-      activateThread(anchor.childThreadIds[0]);
+  function openAnchorStack(anchorElement) {
+    const threadIds = anchorStack(anchorElement).flatMap((anchor) => anchor.childThreadIds);
+    const uniqueThreadIds = [...new Set(threadIds)].filter((threadId) => state.threads[threadId]);
+    if (!uniqueThreadIds.length) return;
+    if (uniqueThreadIds.length === 1) {
+      activateThread(uniqueThreadIds[0]);
       return;
     }
-    showAnchorMenu(anchorElement, anchor);
+    showThreadMenu(anchorElement, uniqueThreadIds);
   }
 
-  function showAnchorMenu(anchorElement, anchor) {
+  function anchorStack(anchorElement) {
+    const anchors = [];
+    for (let node = anchorElement; node; node = node.parentElement) {
+      if (node.classList?.contains("cgpt-thread-anchor")) {
+        const anchor = state.anchors[node.dataset.cgptAnchorId];
+        if (anchor?.childThreadIds.length) anchors.push(anchor);
+      }
+      if (node.matches?.(TURN_SELECTOR)) break;
+    }
+    return anchors;
+  }
+
+  function showThreadMenu(anchorElement, threadIds) {
     closeMenu();
     menu = document.createElement("div");
     menu.className = "cgpt-thread-menu";
-    anchor.childThreadIds.forEach((threadId) => {
+    threadIds.forEach((threadId) => {
       const thread = state.threads[threadId];
       if (!thread) return;
       const button = document.createElement("button");
@@ -640,7 +677,7 @@
 
     const tree = document.createElement("div");
     tree.className = "cgpt-thread-tree";
-    renderThreadRow(tree, MAIN, 0);
+    renderMainTree(tree);
     panel.append(tree);
   }
 
@@ -649,6 +686,64 @@
     element.className = "cgpt-thread-panel";
     document.body.append(element);
     return element;
+  }
+
+  function renderMainTree(root) {
+    renderThreadRow(root, MAIN, 0);
+
+    const entries = readTurns();
+    const entryByKey = turnMap(entries);
+    const mainEntries = entries.filter((entry) => (threadFor(entry) || MAIN) === MAIN);
+    mainEntries.forEach((entry, index) => {
+      if (entry.role !== "assistant") return;
+      renderAnswerRow(root, entry, previousUserTitle(mainEntries, index), 1);
+      sourceChildThreads(MAIN, entry).forEach((threadId) => {
+        renderThreadRow(root, threadId, 2);
+      });
+    });
+
+    threadsWithoutVisibleSource(MAIN, entryByKey).forEach((threadId) => renderThreadRow(root, threadId, 1));
+  }
+
+  function renderAnswerRow(root, entry, title, depth) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cgpt-thread-row cgpt-thread-answer";
+    button.style.paddingLeft = 8 + depth * 14 + "px";
+    button.addEventListener("click", () => {
+      state.activeThreadId = MAIN;
+      saveSoon();
+      scan();
+      setTimeout(() => entry.wrapper.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
+    });
+
+    const text = document.createElement("span");
+    text.className = "cgpt-thread-title";
+    text.textContent = title;
+    button.append(text);
+    root.append(button);
+  }
+
+  function previousUserTitle(entries, assistantIndex) {
+    for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+      if (entries[index].role === "user") return clip(userTurnText(entries[index]), 44);
+    }
+    return "Answer";
+  }
+
+  function sourceChildThreads(sourceThreadId, entry) {
+    const sourceKeys = new Set(entry.aliases || [entry.key]);
+    return [...new Set(Object.values(state.anchors)
+      .filter((anchor) => anchor.sourceThreadId === sourceThreadId && sourceKeys.has(anchor.sourceTurnKey))
+      .flatMap((anchor) => anchor.childThreadIds)
+      .filter((threadId) => state.threads[threadId]))];
+  }
+
+  function threadsWithoutVisibleSource(sourceThreadId, entryByKey) {
+    return state.threads[sourceThreadId].childrenThreadIds.filter((threadId) => {
+      const anchor = state.anchors[state.threads[threadId]?.sourceAnchorId];
+      return !anchor || !entryByKey.get(anchor.sourceTurnKey);
+    });
   }
 
   function renderThreadRow(root, threadId, depth) {
@@ -667,7 +762,9 @@
     button.append(title);
     root.append(button);
 
-    thread.childrenThreadIds.forEach((childId) => renderThreadRow(root, childId, depth + 1));
+    if (threadId !== MAIN) {
+      thread.childrenThreadIds.forEach((childId) => renderThreadRow(root, childId, depth + 1));
+    }
   }
 
   function updatePanelBottom() {
@@ -690,9 +787,9 @@
     return (text || "").replace(/\s+/g, " ").trim();
   }
 
-  function clip(text) {
+  function clip(text, limit = CLIP) {
     const clean = normalize(text);
-    return clean.length > CLIP ? clean.slice(0, CLIP - 3) + "..." : clean || "Thread";
+    return clean.length > limit ? clean.slice(0, limit - 3) + "..." : clean || "Thread";
   }
 
   function isVisible(element) {
