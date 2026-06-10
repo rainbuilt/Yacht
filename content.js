@@ -97,6 +97,7 @@
     applyVisibility(entries);
     applyAnchors(entries);
     hookAskChatGptButtons();
+    syncPendingAskContext();
     renderPanel();
   }
 
@@ -300,6 +301,8 @@
       liveRange = selection.range;
       state.pending = {
         phase: "waiting-user-turn",
+        createdAt: Date.now(),
+        contextSeen: false,
         parentThreadId: state.activeThreadId || MAIN,
         selection: {
           selectedText: selection.selectedText,
@@ -319,6 +322,60 @@
     scheduleScan();
     setTimeout(scheduleScan, 60);
     setTimeout(scheduleScan, 400);
+  }
+
+  function syncPendingAskContext() {
+    const pending = state.pending;
+    if (pending?.phase !== "waiting-user-turn") return;
+
+    if (pendingAskContextVisible(pending)) {
+      if (!pending.contextSeen) {
+        pending.contextSeen = true;
+        saveSoon();
+      }
+      return;
+    }
+
+    if (pending.contextSeen || Date.now() - (pending.createdAt || 0) > 700) {
+      cancelPendingAsk();
+    }
+  }
+
+  function pendingAskContextVisible(pending) {
+    const root = document.querySelector("#thread-bottom-container");
+    const sourceText = comparableText(pending.selection?.selectedText || "");
+    const composerText = comparableText(root?.innerText || "");
+    if (!root || !sourceText || !composerText) return false;
+    if (composerText.includes(sourceText)) return true;
+
+    const head = sourceText.slice(0, 30);
+    if (head.length >= 8 && composerText.includes(head)) return true;
+
+    const tokens = sourceText.split(/\s+/).filter((token) => token.length > 2);
+    if (tokens.length < 2) return false;
+    return tokens.filter((token) => composerText.includes(token)).length >= Math.min(2, tokens.length);
+  }
+
+  function cancelPendingAsk() {
+    const anchorId = state.pending?.selection?.sourceAnchorId;
+    state.pending = null;
+    removeUnusedAnchor(anchorId);
+    saveSoon();
+  }
+
+  function removeUnusedAnchor(anchorId) {
+    const anchor = anchorId && state.anchors[anchorId];
+    if (!anchor || anchor.childThreadIds.length) return;
+    document.querySelectorAll('[data-cgpt-anchor-id="' + anchorId + '"]').forEach(unwrapAnchorElement);
+    delete state.anchors[anchorId];
+  }
+
+  function unwrapAnchorElement(element) {
+    const parent = element.parentNode;
+    if (!parent) return;
+    while (element.firstChild) parent.insertBefore(element.firstChild, element);
+    element.remove();
+    parent.normalize();
   }
 
   function captureSelection() {
