@@ -5,6 +5,7 @@
   const BUTTON_ATTR = "data-cgpt-thread-hooked";
   const HIDDEN = "cgpt-thread-hidden";
   const CLIP = 40;
+  const PENDING_USER_TURN_TIMEOUT = 10 * 60 * 1000;
 
   let state;
   let storageKey;
@@ -198,8 +199,9 @@
       const testId = section.getAttribute("data-testid");
       const turnId = section.getAttribute("data-turn-id");
       const role = section.getAttribute("data-turn") || "";
-      const key = testId || turnId || role + ":" + index;
-      const aliases = [key, turnId && testId && turnId + ":" + testId, turnIdCounts.get(turnId) === 1 && turnId];
+      const uniqueTurnId = turnId && turnIdCounts.get(turnId) === 1 ? turnId : "";
+      const key = uniqueTurnId || testId || role + ":" + index;
+      const aliases = [key, testId, turnId && testId && turnId + ":" + testId, uniqueTurnId];
       return {
         section,
         wrapper: section.closest(WRAPPER_SELECTOR) || section,
@@ -213,8 +215,18 @@
   function assignNewTurns(entries) {
     let changed = false;
     const lastKnownIndex = entries.reduce((last, entry, index) => threadFor(entry) ? index : last, -1);
+    const pendingKnownTurnKeys = state.pending?.knownTurnKeys || [];
+    const pendingParentThreadId = state.pending?.parentThreadId || MAIN;
 
     entries.forEach((entry, index) => {
+      const knownForPending = pendingKnownTurnKeys.includes(entry.key);
+      const newForPending = pendingKnownTurnKeys.length ? !knownForPending : index > lastKnownIndex;
+      const pendingThreadId = state.pending && newForPending && pendingTarget(entry);
+      if (pendingThreadId) {
+        changed = assignTurn(entry, pendingThreadId) || changed;
+        return;
+      }
+
       const existingThreadId = threadFor(entry);
       if (existingThreadId) {
         changed = (state.turnToThread[entry.key] !== existingThreadId && assignTurn(entry, existingThreadId)) || changed;
@@ -222,7 +234,11 @@
       }
 
       let threadId = MAIN;
-      if (index > lastKnownIndex) threadId = state.pending ? pendingTarget(entry) || MAIN : state.activeThreadId;
+      if (knownForPending && state.threads[pendingParentThreadId]) {
+        threadId = pendingParentThreadId;
+      } else if (index > lastKnownIndex) {
+        threadId = state.activeThreadId;
+      }
       changed = assignTurn(entry, threadId) || changed;
     });
 
@@ -290,7 +306,12 @@
     state.threads[threadId] = newThread(threadId, "", parentThreadId, anchor.id);
     state.threads[parentThreadId].childrenThreadIds.push(threadId);
     anchor.childThreadIds.push(threadId);
-    state.pending = { threadId, phase: "waiting-assistant-turn" };
+    state.pending = {
+      threadId,
+      phase: "waiting-assistant-turn",
+      parentThreadId,
+      knownTurnKeys: [...new Set([...(state.pending.knownTurnKeys || []), entry.key])]
+    };
     state.activeThreadId = threadId;
 
     state.threads[threadId].title = titleFromUserTurn(entry, state.threads[threadId]);
@@ -372,6 +393,7 @@
         createdAt: Date.now(),
         contextSeen: false,
         parentThreadId: state.activeThreadId,
+        knownTurnKeys: snapshotTurnKeys(readTurns()),
         selection: {
           selectedText: selection.selectedText,
           normalizedSelectedText: selection.normalizedSelectedText,
@@ -390,6 +412,10 @@
     [0, 60, 400].forEach((delay) => setTimeout(scheduleScan, delay));
   }
 
+  function snapshotTurnKeys(entries) {
+    return [...new Set(entries.map((entry) => entry.key))];
+  }
+
   function syncPendingAskContext() {
     const pending = state.pending;
     if (pending?.phase !== "waiting-user-turn") return;
@@ -402,7 +428,9 @@
       return;
     }
 
-    if (pending.contextSeen || Date.now() - (pending.createdAt || 0) > 700) {
+    // Sending a native Ask follow-up can hide the context before the new user turn appears.
+    const age = Date.now() - (pending.createdAt || 0);
+    if (age > PENDING_USER_TURN_TIMEOUT) {
       cancelPendingAsk();
     }
   }
@@ -646,6 +674,9 @@
     const target = asElement(event.target);
     const clickedPanel = target?.closest(".cgpt-thread-panel");
     const clickedMenu = target?.closest(".cgpt-thread-menu");
+    const button = target?.closest("button");
+
+    if (button) maybeCancelPendingAskReferenceRemove(button);
 
     const anchorElement = target?.closest(".cgpt-thread-anchor");
     if (anchorElement) {
@@ -661,7 +692,6 @@
 
     if (panelOpen && !clickedPanel && !clickedMenu) closePanelTree();
     if (menu && !target?.closest(".cgpt-thread-menu")) closeMenu();
-    const button = target?.closest("button");
     if (button) maybeHandleNativeContextButton(event, button);
   }
 
@@ -753,6 +783,27 @@
 
     stopEvent(event);
     activateThread(thread.parentThreadId || MAIN, anchor.id);
+  }
+
+  function maybeCancelPendingAskReferenceRemove(button) {
+    const pending = state.pending;
+    if (pending?.phase !== "waiting-user-turn") return;
+    if (!button.closest("#thread-bottom-container")) return;
+
+    const label = buttonLabel(button).toLowerCase();
+    if (!/\bremove\b|삭제|제거/.test(label)) return;
+    if (!buttonBelongsToPendingContext(button, pending)) return;
+
+    cancelPendingAsk();
+  }
+
+  function buttonBelongsToPendingContext(button, pending) {
+    const root = button.closest("#thread-bottom-container");
+    const sourceText = comparableText(pending.selection?.selectedText || "");
+    for (let node = button.parentElement; node && node !== root; node = node.parentElement) {
+      if (fuzzyTextMatch(comparableText(node.innerText), sourceText, 3, 2)) return true;
+    }
+    return false;
   }
 
   function isNativeContextButton(button, anchor) {
