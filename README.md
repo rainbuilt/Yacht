@@ -39,6 +39,7 @@ YACHT is not affiliated with, endorsed by, or sponsored by OpenAI.
 - It does not intercept network requests, modify OpenAI API payloads, or change ChatGPT's composer state manually.
 - Turn assignment is intentionally simple: after **Ask ChatGPT**, the next submitted user turn creates the subthread, and the next assistant turn is assigned to it.
 - Source anchors are best effort. Very complex selections spanning multiple DOM text nodes may not be re-wrapped perfectly after ChatGPT rerenders.
+- Very long conversations can be affected by ChatGPT's own rendering, virtualization, or DOM changes. In those cases, YACHT's visual thread view may not update perfectly until the page is refreshed or the chat is reset.
 - Selectors are based on the provided `references/` HTML files and may need updates if ChatGPT changes its DOM.
 
 ## Files

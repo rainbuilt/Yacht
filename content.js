@@ -16,6 +16,8 @@
   let enabled = true;
   let anchorColor = "#2f7df6";
   let panelOpen = false;
+  let panelToggleSignature = "";
+  let panelTreeSignature = "";
   let lastPath = location.pathname;
   let lastSelection = null;
   let forwardingAskClick = false;
@@ -32,7 +34,7 @@
         asElement(mutation.target)?.closest(".cgpt-thread-panel, .cgpt-thread-menu")
       );
       if (!onlyExtensionUi) scheduleScan();
-    }).observe(document.body, { attributes: true, childList: true, subtree: true });
+    }).observe(document.body, { childList: true, subtree: true });
     ["selectionchange", "mouseup", "touchend"].forEach((type) => document.addEventListener(type, scheduleScan));
     [
       ["pointerdown", onPointerDown],
@@ -185,9 +187,9 @@
     repairReloadedReplies(entries);
     applyVisibility(entries);
     applyAnchors(entries);
-    hookAskChatGptButtons();
+    if (window.getSelection()?.toString().trim()) hookAskChatGptButtons();
     syncPendingAskContext();
-    renderPanel();
+    renderPanel(entries);
   }
 
   function readTurns() {
@@ -514,9 +516,10 @@
   }
 
   function applyAnchors(entries) {
+    const anchors = Object.values(state.anchors).filter((anchor) => anchor.sourceThreadId === state.activeThreadId);
+    if (!anchors.length) return;
     const byKey = turnMap(entries);
-    Object.values(state.anchors).forEach((anchor) => {
-      if (anchor.sourceThreadId !== state.activeThreadId) return;
+    anchors.forEach((anchor) => {
       const entry = byKey.get(anchor.sourceTurnKey);
       if (entry) wrapAnchor(entry.section, anchor);
     });
@@ -852,7 +855,7 @@
     scrollTo(anchorElement || entry?.wrapper);
   }
 
-  function renderPanel() {
+  function renderPanel(entries) {
     if (!enabled) {
       cleanupDisabledUi();
       return;
@@ -881,10 +884,16 @@
 
     panel.classList.toggle("is-open", panelOpen);
     updatePanelToggleLabel();
+    if (!panelOpen) return;
+
+    const panelEntries = entries || readTurns();
+    const treeSignature = panelTreeSignatureFor(panelEntries);
+    if (treeSignature === panelTreeSignature) return;
+    panelTreeSignature = treeSignature;
 
     const tree = panel.querySelector(".cgpt-thread-tree");
     tree.replaceChildren();
-    renderMainTree(tree);
+    renderMainTree(tree, panelEntries);
   }
 
   function panelHasContent() {
@@ -918,23 +927,41 @@
     const toggle = panel?.querySelector(".cgpt-thread-toggle");
     if (!toggle) return;
     const active = state.threads[state.activeThreadId] || state.threads[MAIN];
+    const signature = [panelOpen, active.id, active.title].join("|");
+    if (signature === panelToggleSignature) return;
+    panelToggleSignature = signature;
     const toggleLabel = element("span", "cgpt-thread-toggle-label", panelOpen ? "Hide" : "Thread");
     toggle.replaceChildren(toggleLabel, threadTitleElement(active));
   }
 
-  function renderMainTree(root) {
+  function renderMainTree(root, entries) {
     renderThreadRow(root, MAIN, 0);
 
-    const entries = readTurns();
     const entryByKey = turnMap(entries);
+    const childThreadsBySourceKey = sourceChildThreadMap(MAIN);
     const mainEntries = entries.filter((entry) => (threadFor(entry) || MAIN) === MAIN);
     mainEntries.forEach((entry, index) => {
       if (entry.role !== "assistant") return;
       renderAnswerRow(root, entry, previousUserTitle(mainEntries, index), 1);
-      sourceChildThreads(MAIN, entry).forEach((threadId) => renderThreadRow(root, threadId, 2));
+      sourceChildThreads(entry, childThreadsBySourceKey).forEach((threadId) => renderThreadRow(root, threadId, 2));
     });
 
     threadsWithoutVisibleSource(MAIN, entryByKey).forEach((threadId) => renderThreadRow(root, threadId, 1));
+  }
+
+  function panelTreeSignatureFor(entries) {
+    const threads = Object.values(state.threads)
+      .map((thread) => [thread.id, thread.title, thread.childrenThreadIds.join(".")].join(":"))
+      .join("|");
+    const anchors = Object.values(state.anchors)
+      .map((anchor) => [anchor.id, anchor.sourceTurnKey, anchor.childThreadIds.join(".")].join(":"))
+      .join("|");
+    return [
+      state.activeThreadId,
+      threads,
+      anchors,
+      entries.map((entry) => [entry.key, entry.role, threadFor(entry) || MAIN].join(":")).join("|")
+    ].join("||");
   }
 
   function renderAnswerRow(root, entry, title, depth) {
@@ -951,12 +978,19 @@
     return "Answer";
   }
 
-  function sourceChildThreads(sourceThreadId, entry) {
-    const sourceKeys = new Set(aliasesOf(entry));
-    return [...new Set(Object.values(state.anchors)
-      .filter((anchor) => anchor.sourceThreadId === sourceThreadId && sourceKeys.has(anchor.sourceTurnKey))
-      .flatMap((anchor) => anchor.childThreadIds)
-      .filter((threadId) => state.threads[threadId]))];
+  function sourceChildThreadMap(sourceThreadId) {
+    const map = new Map();
+    Object.values(state.anchors).forEach((anchor) => {
+      if (anchor.sourceThreadId !== sourceThreadId) return;
+      const threadIds = map.get(anchor.sourceTurnKey) || [];
+      threadIds.push(...anchor.childThreadIds.filter((threadId) => state.threads[threadId]));
+      map.set(anchor.sourceTurnKey, threadIds);
+    });
+    return map;
+  }
+
+  function sourceChildThreads(entry, childThreadsBySourceKey) {
+    return [...new Set(aliasesOf(entry).flatMap((key) => childThreadsBySourceKey.get(key) || []))];
   }
 
   function threadsWithoutVisibleSource(sourceThreadId, entryByKey) {
