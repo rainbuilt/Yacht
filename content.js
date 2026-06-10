@@ -689,38 +689,62 @@
 
   function renderPanel() {
     panel ||= createPanel();
-    updatePanelBottom();
 
     const hasThreads = state.threads[MAIN].childrenThreadIds.length > 0;
-    panel.hidden = !hasThreads && state.activeThreadId === MAIN;
-    if (panel.hidden) return;
+    const shouldShow = hasThreads || state.activeThreadId !== MAIN;
+    if (!shouldShow) {
+      panel.classList.remove("is-open");
+      setTimeout(() => {
+        const hasThreadsNow = state.threads[MAIN].childrenThreadIds.length > 0;
+        if (hasThreadsNow || state.activeThreadId !== MAIN) return;
+        panel.classList.remove("is-visible");
+        setTimeout(() => {
+          const stillEmpty = state.threads[MAIN].childrenThreadIds.length === 0;
+          if (stillEmpty && state.activeThreadId === MAIN) panel.hidden = true;
+        }, 340);
+      }, 380);
+      return;
+    }
+
+    if (panel.hidden) {
+      panel.hidden = false;
+      requestAnimationFrame(() => panel.classList.add("is-visible"));
+    } else {
+      panel.classList.add("is-visible");
+    }
+    updatePanelBottom();
 
     const active = state.threads[state.activeThreadId] || state.threads[MAIN];
     panel.classList.toggle("is-open", panelOpen);
-    panel.replaceChildren();
 
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "cgpt-thread-toggle";
+    const toggle = panel.querySelector(".cgpt-thread-toggle");
     const toggleLabel = document.createElement("span");
     toggleLabel.className = "cgpt-thread-toggle-label";
     toggleLabel.textContent = panelOpen ? "Hide" : "Thread";
-    toggle.append(toggleLabel, threadTitleElement(active));
-    toggle.addEventListener("click", () => {
-      panelOpen = !panelOpen;
-      renderPanel();
-    });
-    panel.append(toggle);
+    toggle.replaceChildren(toggleLabel, threadTitleElement(active));
 
-    const tree = document.createElement("div");
-    tree.className = "cgpt-thread-tree";
+    const tree = panel.querySelector(".cgpt-thread-tree");
+    tree.replaceChildren();
     renderMainTree(tree);
-    panel.append(tree);
   }
 
   function createPanel() {
     const element = document.createElement("div");
     element.className = "cgpt-thread-panel";
+    element.hidden = true;
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "cgpt-thread-toggle";
+    toggle.addEventListener("click", () => {
+      panelOpen = !panelOpen;
+      renderPanel();
+    });
+
+    const tree = document.createElement("div");
+    tree.className = "cgpt-thread-tree";
+
+    element.append(toggle, tree);
     document.body.append(element);
     return element;
   }
