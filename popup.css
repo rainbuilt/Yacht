@@ -1,6 +1,6 @@
 :root {
   color-scheme: light dark;
-  font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 17px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 * {
@@ -9,15 +9,15 @@
 
 body {
   margin: 0;
-  width: 300px;
+  width: 340px;
   color: #202124;
   background: #f7f7f5;
 }
 
 .popup {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 14px;
+  padding: 16px;
 }
 
 .header {
@@ -32,8 +32,9 @@ p {
 }
 
 h1 {
-  font-size: 18px;
+  font-size: 24px;
   font-weight: 700;
+  line-height: 1.15;
 }
 
 p,
@@ -41,12 +42,12 @@ small,
 .version,
 .status span,
 .stats span {
-  color: #6a6f76;
+  color: #4f5660;
 }
 
 .version {
-  font-size: 12px;
-  padding-top: 3px;
+  font-size: 14px;
+  padding-top: 4px;
 }
 
 .status,
@@ -62,13 +63,13 @@ small,
   align-items: center;
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 10px;
-  padding: 11px;
+  gap: 12px;
+  padding: 13px;
 }
 
 .status-dot {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
   border-radius: 999px;
   background: #9aa0a6;
 }
@@ -94,7 +95,7 @@ small,
 .stats div {
   display: grid;
   gap: 2px;
-  padding: 10px 12px;
+  padding: 12px 14px;
 }
 
 .stats div + div {
@@ -102,8 +103,14 @@ small,
 }
 
 .stats strong {
-  font-size: 20px;
+  font-size: 28px;
   line-height: 1.1;
+}
+
+small,
+.status span,
+.stats span {
+  font-size: 14px;
 }
 
 .controls {
@@ -113,7 +120,7 @@ small,
 .color-panel {
   display: grid;
   gap: 10px;
-  padding: 11px 12px 12px;
+  padding: 13px 14px 14px;
 }
 
 .section-head {
@@ -126,15 +133,15 @@ small,
   background: transparent;
   border: 0;
   cursor: pointer;
-  height: 26px;
+  height: 30px;
   padding: 0;
-  width: 34px;
+  width: 38px;
 }
 
 .swatches {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
+  gap: 9px;
 }
 
 .swatches button {
@@ -155,7 +162,7 @@ small,
   display: flex;
   gap: 12px;
   justify-content: space-between;
-  padding: 11px 12px;
+  padding: 13px 14px;
 }
 
 .toggle-row + .toggle-row {
@@ -169,8 +176,8 @@ small,
 
 input[type="checkbox"] {
   accent-color: #2f7df6;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
 }
 
 button {
@@ -183,7 +190,7 @@ button {
   border-radius: 8px;
   color: #9a3d25;
   cursor: pointer;
-  min-height: 36px;
+  min-height: 46px;
 }
 
 .reset:hover {
