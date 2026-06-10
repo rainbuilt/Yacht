@@ -1,0 +1,241 @@
+:root {
+  color-scheme: light dark;
+  font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 300px;
+  color: #202124;
+  background: #f7f7f5;
+}
+
+.popup {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.header {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+p,
+small,
+.version,
+.status span,
+.stats span {
+  color: #6a6f76;
+}
+
+.version {
+  font-size: 12px;
+  padding-top: 3px;
+}
+
+.status,
+.stats,
+.controls,
+.color-panel {
+  background: #fff;
+  border: 1px solid #deded8;
+  border-radius: 8px;
+}
+
+.status {
+  align-items: center;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  padding: 11px;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #9aa0a6;
+}
+
+.status.is-active .status-dot {
+  background: #1a936f;
+}
+
+.status.is-off .status-dot {
+  background: #d56f3e;
+}
+
+.status strong,
+.status span {
+  display: block;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.stats div {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+}
+
+.stats div + div {
+  border-left: 1px solid #ededeb;
+}
+
+.stats strong {
+  font-size: 20px;
+  line-height: 1.1;
+}
+
+.controls {
+  display: grid;
+}
+
+.color-panel {
+  display: grid;
+  gap: 10px;
+  padding: 11px 12px 12px;
+}
+
+.section-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.section-head input {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  height: 26px;
+  padding: 0;
+  width: 34px;
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.swatches button {
+  aspect-ratio: 1;
+  background: var(--swatch);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.swatches button.is-active {
+  border-color: #202124;
+  box-shadow: 0 0 0 2px #fff inset;
+}
+
+.toggle-row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 11px 12px;
+}
+
+.toggle-row + .toggle-row {
+  border-top: 1px solid #ededeb;
+}
+
+.toggle-row span {
+  display: grid;
+  min-width: 0;
+}
+
+input[type="checkbox"] {
+  accent-color: #2f7df6;
+  width: 18px;
+  height: 18px;
+}
+
+button {
+  font: inherit;
+}
+
+.reset {
+  background: transparent;
+  border: 1px solid #deded8;
+  border-radius: 8px;
+  color: #9a3d25;
+  cursor: pointer;
+  min-height: 36px;
+}
+
+.reset:hover {
+  background: #fff;
+}
+
+body.is-unavailable .stats,
+body.is-unavailable .controls,
+body.is-unavailable .color-panel,
+body.is-unavailable .reset {
+  opacity: 0.48;
+  pointer-events: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #ececf1;
+    background: #202123;
+  }
+
+  p,
+  small,
+  .version,
+  .status span,
+  .stats span {
+    color: #a5a5ad;
+  }
+
+  .status,
+  .stats,
+  .controls,
+  .color-panel {
+    background: #2f3033;
+    border-color: #4a4b4f;
+  }
+
+  .swatches button.is-active {
+    border-color: #ececf1;
+    box-shadow: 0 0 0 2px #2f3033 inset;
+  }
+
+  .stats div + div,
+  .toggle-row + .toggle-row {
+    border-color: #44454a;
+  }
+
+  .reset {
+    border-color: #4a4b4f;
+    color: #ff9a78;
+  }
+
+  .reset:hover {
+    background: #2f3033;
+  }
+}

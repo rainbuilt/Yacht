@@ -12,6 +12,8 @@
   let saveTimer;
   let panel;
   let menu;
+  let enabled = true;
+  let anchorColor = "#2f7df6";
   let panelOpen = false;
   let lastPath = location.pathname;
   let lastSelection = null;
@@ -21,21 +23,23 @@
   init();
 
   async function init() {
+    await loadSettings();
     await loadState();
+    chrome.runtime.onMessage.addListener(handleMessage);
     new MutationObserver((mutations) => {
       const onlyExtensionUi = mutations.every((mutation) =>
         asElement(mutation.target)?.closest(".cgpt-thread-panel, .cgpt-thread-menu")
       );
       if (!onlyExtensionUi) scheduleScan();
     }).observe(document.body, { attributes: true, childList: true, subtree: true });
-    document.addEventListener("selectionchange", scheduleScan);
-    document.addEventListener("mouseup", scheduleScan);
-    document.addEventListener("touchend", scheduleScan);
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("pointermove", onPointerMove, true);
-    document.addEventListener("pointerup", onPointerUp, true);
-    document.addEventListener("click", onDocumentClick, true);
-    document.addEventListener("keydown", onDocumentKeydown, true);
+    ["selectionchange", "mouseup", "touchend"].forEach((type) => document.addEventListener(type, scheduleScan));
+    [
+      ["pointerdown", onPointerDown],
+      ["pointermove", onPointerMove],
+      ["pointerup", onPointerUp],
+      ["click", onDocumentClick],
+      ["keydown", onDocumentKeydown]
+    ].forEach(([type, handler]) => document.addEventListener(type, handler, true));
     window.addEventListener("resize", updatePanelBottom);
     setInterval(checkUrl, 700);
     scheduleScan();
@@ -60,19 +64,99 @@
     state.activeThreadId = state.threads[state.activeThreadId] ? state.activeThreadId : MAIN;
   }
 
+  async function loadSettings() {
+    const saved = await chrome.storage.local.get(["cgpt-thread-enabled", "cgpt-thread-anchor-color"]);
+    enabled = saved["cgpt-thread-enabled"] !== false;
+    anchorColor = validColor(saved["cgpt-thread-anchor-color"]) || anchorColor;
+    document.documentElement.classList.toggle("cgpt-thread-disabled", !enabled);
+    applyAnchorColor();
+  }
+
+  function handleMessage(message, _sender, sendResponse) {
+    (async () => {
+      if (message?.type === "getStatus") return statusForPopup();
+      if (message?.type === "setEnabled") return setEnabledForPopup(message.enabled);
+      if (message?.type === "setPanelOpen") return setPanelOpenForPopup(message.open);
+      if (message?.type === "setAnchorColor") return setAnchorColorForPopup(message.color);
+      if (message?.type === "resetConversation") return resetConversationForPopup();
+      return null;
+    })().then(sendResponse);
+    return true;
+  }
+
+  async function setEnabledForPopup(value) {
+    enabled = !!value;
+    await chrome.storage.local.set({ "cgpt-thread-enabled": enabled });
+    document.documentElement.classList.toggle("cgpt-thread-disabled", !enabled);
+    if (enabled) {
+      scheduleScan();
+    } else {
+      cleanupDisabledUi();
+    }
+    return statusForPopup();
+  }
+
+  function setPanelOpenForPopup(open) {
+    panelOpen = !!open;
+    renderPanel();
+    return statusForPopup();
+  }
+
+  async function setAnchorColorForPopup(color) {
+    const nextColor = validColor(color);
+    if (!nextColor) return statusForPopup();
+    anchorColor = nextColor;
+    applyAnchorColor();
+    await chrome.storage.local.set({ "cgpt-thread-anchor-color": anchorColor });
+    return statusForPopup();
+  }
+
+  async function resetConversationForPopup() {
+    cleanupDisabledUi();
+    unwrapAllAnchors();
+    state = freshState(getConversationId());
+    await chrome.storage.local.remove(storageKey);
+    await chrome.storage.local.set({ [storageKey]: state });
+    scheduleScan();
+    return statusForPopup();
+  }
+
+  function statusForPopup() {
+    return {
+      enabled,
+      conversationId: state?.conversationId || getConversationId(),
+      activeThreadId: state?.activeThreadId || MAIN,
+      activeThreadTitle: state?.threads?.[state.activeThreadId]?.title || "Main",
+      threadCount: Math.max(0, Object.keys(state?.threads || {}).length - 1),
+      anchorCount: Object.keys(state?.anchors || {}).length,
+      panelOpen: enabled && panelOpen && panelHasContent(),
+      anchorColor
+    };
+  }
+
+  function cleanupDisabledUi() {
+    document.querySelectorAll("." + HIDDEN).forEach((node) => node.classList.remove(HIDDEN));
+    closeMenu();
+    if (panel) {
+      panel.classList.remove("is-open", "is-visible");
+      panel.hidden = true;
+    }
+  }
+
+  function unwrapAllAnchors() {
+    document.querySelectorAll(".cgpt-thread-anchor").forEach(unwrapAnchorElement);
+  }
+
+  function applyAnchorColor() {
+    document.documentElement.style.setProperty("--cgpt-thread-anchor-color", anchorColor);
+  }
+
   function freshState(id) {
     return {
       conversationId: id,
       activeThreadId: MAIN,
       threads: {
-        [MAIN]: {
-          id: MAIN,
-          title: "Main",
-          parentThreadId: null,
-          childrenThreadIds: [],
-          sourceAnchorId: null,
-          turnIds: []
-        }
+        [MAIN]: newThread(MAIN, "Main", null, null)
       },
       anchors: {},
       turnToThread: {},
@@ -91,6 +175,10 @@
 
   function scan() {
     if (!state) return;
+    if (!enabled) {
+      cleanupDisabledUi();
+      return;
+    }
     const entries = readTurns();
     assignNewTurns(entries);
     repairReloadedReplies(entries);
@@ -111,42 +199,30 @@
       const turnId = section.getAttribute("data-turn-id");
       const role = section.getAttribute("data-turn") || "";
       const key = testId || turnId || role + ":" + index;
-      const aliases = [key];
-      if (turnId && testId) aliases.push(turnId + ":" + testId);
-      if (turnId && turnIdCounts.get(turnId) === 1) aliases.push(turnId);
+      const aliases = [key, turnId && testId && turnId + ":" + testId, turnIdCounts.get(turnId) === 1 && turnId];
       return {
         section,
         wrapper: section.closest(WRAPPER_SELECTOR) || section,
         role,
         key,
-        aliases: [...new Set(aliases)]
+        aliases: [...new Set(aliases.filter(Boolean))]
       };
     });
   }
 
   function assignNewTurns(entries) {
     let changed = false;
-    const knownIndices = entries
-      .map((entry, index) => threadFor(entry) ? index : -1)
-      .filter((index) => index >= 0);
-    const lastKnownIndex = knownIndices.length ? Math.max(...knownIndices) : -1;
+    const lastKnownIndex = entries.reduce((last, entry, index) => threadFor(entry) ? index : last, -1);
 
     entries.forEach((entry, index) => {
       const existingThreadId = threadFor(entry);
       if (existingThreadId) {
-        if (state.turnToThread[entry.key] !== existingThreadId) {
-          changed = assignTurn(entry, existingThreadId) || changed;
-        }
+        changed = (state.turnToThread[entry.key] !== existingThreadId && assignTurn(entry, existingThreadId)) || changed;
         return;
       }
 
       let threadId = MAIN;
-      if (state.pending && index > lastKnownIndex) {
-        threadId = pendingTarget(entry) || MAIN;
-      } else if (!state.pending && state.activeThreadId !== MAIN && index > lastKnownIndex) {
-        threadId = state.activeThreadId;
-      }
-
+      if (index > lastKnownIndex) threadId = state.pending ? pendingTarget(entry) || MAIN : state.activeThreadId;
       changed = assignTurn(entry, threadId) || changed;
     });
 
@@ -154,7 +230,7 @@
   }
 
   function threadFor(entry) {
-    for (const key of entry.aliases || [entry.key]) {
+    for (const key of aliasesOf(entry)) {
       const threadId = state.turnToThread[key];
       if (threadId && state.threads[threadId]) return threadId;
     }
@@ -209,45 +285,39 @@
 
     const anchor = state.anchors[selection.sourceAnchorId] || findOrCreateAnchor(selection);
     const threadId = "t-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
-    const parentThreadId = state.threads[state.pending.parentThreadId]
-      ? state.pending.parentThreadId
-      : MAIN;
+    const parentThreadId = state.threads[state.pending.parentThreadId] ? state.pending.parentThreadId : MAIN;
 
-    state.threads[threadId] = {
-      id: threadId,
-      title: "[" + clip(selection.selectedText, 24) + "] Thread",
-      parentThreadId,
-      childrenThreadIds: [],
-      sourceAnchorId: anchor.id,
-      turnIds: []
-    };
+    state.threads[threadId] = newThread(threadId, "", parentThreadId, anchor.id);
     state.threads[parentThreadId].childrenThreadIds.push(threadId);
     anchor.childThreadIds.push(threadId);
     state.pending = { threadId, phase: "waiting-assistant-turn" };
     state.activeThreadId = threadId;
 
-    const thread = state.threads[threadId];
-    thread.title = titleFromUserTurn(entry, thread) || thread.title;
+    state.threads[threadId].title = titleFromUserTurn(entry, state.threads[threadId]);
     return threadId;
   }
 
   function assignTurn(entry, threadId) {
     const oldThreadId = threadFor(entry);
+    const aliases = aliasesOf(entry);
     if (oldThreadId === threadId && state.turnToThread[entry.key] === threadId) return false;
     if (oldThreadId && state.threads[oldThreadId]) {
-      const aliases = new Set(entry.aliases || [entry.key]);
-      state.threads[oldThreadId].turnIds = state.threads[oldThreadId].turnIds.filter((key) => !aliases.has(key));
+      state.threads[oldThreadId].turnIds = state.threads[oldThreadId].turnIds.filter((key) => !aliases.includes(key));
     }
     state.turnToThread[entry.key] = threadId;
-    (entry.aliases || []).forEach((alias) => {
+    aliases.forEach((alias) => {
       if (alias !== entry.key && state.turnToThread[alias] === threadId) delete state.turnToThread[alias];
     });
     const thread = state.threads[threadId];
     if (thread) {
-      thread.turnIds = thread.turnIds.filter((key) => !(entry.aliases || []).includes(key));
+      thread.turnIds = thread.turnIds.filter((key) => !aliases.includes(key));
       thread.turnIds.push(entry.key);
     }
     return true;
+  }
+
+  function newThread(id, title, parentThreadId, sourceAnchorId) {
+    return { id, title, parentThreadId, childrenThreadIds: [], sourceAnchorId, turnIds: [] };
   }
 
   function titleFromUserTurn(entry, thread) {
@@ -280,12 +350,13 @@
 
       nativeButton.setAttribute(BUTTON_ATTR, "true");
       nativeButton.addEventListener("mousedown", () => {
+        if (!enabled) return;
         lastSelection = captureSelection();
       });
       nativeButton.addEventListener("click", (event) => {
+        if (!enabled) return;
         if (forwardingAskClick) return;
-        event.preventDefault();
-        event.stopPropagation();
+        stopEvent(event);
         startAskInThread(nativeButton, lastSelection || captureSelection());
         lastSelection = null;
       }, true);
@@ -293,17 +364,14 @@
   }
 
   function startAskInThread(nativeButton, selection) {
-    let liveAnchor = null;
-    let liveRange = null;
+    let anchor = null;
     if (selection) {
-      const anchor = findOrCreateAnchor(selection);
-      liveAnchor = anchor;
-      liveRange = selection.range;
+      anchor = findOrCreateAnchor(selection);
       state.pending = {
         phase: "waiting-user-turn",
         createdAt: Date.now(),
         contextSeen: false,
-        parentThreadId: state.activeThreadId || MAIN,
+        parentThreadId: state.activeThreadId,
         selection: {
           selectedText: selection.selectedText,
           normalizedSelectedText: selection.normalizedSelectedText,
@@ -318,10 +386,8 @@
     forwardingAskClick = true;
     nativeButton.click();
     forwardingAskClick = false;
-    if (liveAnchor && liveRange) setTimeout(() => wrapLiveRange(liveRange, liveAnchor), 0);
-    scheduleScan();
-    setTimeout(scheduleScan, 60);
-    setTimeout(scheduleScan, 400);
+    if (anchor && selection.range) setTimeout(() => wrapLiveRange(selection.range, anchor), 0);
+    [0, 60, 400].forEach((delay) => setTimeout(scheduleScan, delay));
   }
 
   function syncPendingAskContext() {
@@ -343,17 +409,7 @@
 
   function pendingAskContextVisible(pending) {
     const root = document.querySelector("#thread-bottom-container");
-    const sourceText = comparableText(pending.selection?.selectedText || "");
-    const composerText = comparableText(root?.innerText || "");
-    if (!root || !sourceText || !composerText) return false;
-    if (composerText.includes(sourceText)) return true;
-
-    const head = sourceText.slice(0, 30);
-    if (head.length >= 8 && composerText.includes(head)) return true;
-
-    const tokens = sourceText.split(/\s+/).filter((token) => token.length > 2);
-    if (tokens.length < 2) return false;
-    return tokens.filter((token) => composerText.includes(token)).length >= Math.min(2, tokens.length);
+    return !!root && fuzzyTextMatch(comparableText(root.innerText), comparableText(pending.selection?.selectedText || ""), 3, 2);
   }
 
   function cancelPendingAsk() {
@@ -440,7 +496,7 @@
 
   function turnMap(entries) {
     const map = new Map();
-    entries.forEach((entry) => (entry.aliases || [entry.key]).forEach((key) => map.set(key, entry)));
+    entries.forEach((entry) => aliasesOf(entry).forEach((key) => map.set(key, entry)));
     return map;
   }
 
@@ -555,13 +611,11 @@
 
   function wrapTextPiece({ node, index, length }, anchor) {
     const text = node.nodeValue;
-    const span = document.createElement("span");
-    span.className = "cgpt-thread-anchor";
+    const span = element("span", "cgpt-thread-anchor", text.slice(index, index + length));
     span.dataset.cgptAnchorId = anchor.id;
     span.role = "button";
     span.tabIndex = 0;
     span.title = anchor.childThreadIds.length === 1 ? "Open thread" : "Open thread menu";
-    span.textContent = text.slice(index, index + length);
 
     const fragment = document.createDocumentFragment();
     if (index) fragment.append(text.slice(0, index));
@@ -588,54 +642,61 @@
   }
 
   function onDocumentClick(event) {
+    if (!enabled) return;
     const target = asElement(event.target);
+    const clickedPanel = target?.closest(".cgpt-thread-panel");
+    const clickedMenu = target?.closest(".cgpt-thread-menu");
+
     const anchorElement = target?.closest(".cgpt-thread-anchor");
     if (anchorElement) {
       if (anchorPointer?.suppressClick || window.getSelection()?.toString().trim()) {
         anchorPointer = null;
-        event.preventDefault();
-        event.stopPropagation();
+        stopEvent(event);
         return;
       }
-      event.preventDefault();
-      event.stopPropagation();
+      stopEvent(event);
       openAnchorStack(anchorElement);
       return;
     }
 
+    if (panelOpen && !clickedPanel && !clickedMenu) closePanelTree();
     if (menu && !target?.closest(".cgpt-thread-menu")) closeMenu();
     const button = target?.closest("button");
     if (button) maybeHandleNativeContextButton(event, button);
   }
 
   function onPointerDown(event) {
+    if (!enabled) return;
     const anchor = asElement(event.target)?.closest(".cgpt-thread-anchor");
     anchorPointer = anchor ? { x: event.clientX, y: event.clientY, moved: false } : null;
   }
 
   function onPointerMove(event) {
+    if (!enabled) return;
     if (!anchorPointer) return;
-    const dx = Math.abs(event.clientX - anchorPointer.x);
-    const dy = Math.abs(event.clientY - anchorPointer.y);
-    if (dx > 3 || dy > 3) anchorPointer.moved = true;
+    if (Math.abs(event.clientX - anchorPointer.x) > 3 || Math.abs(event.clientY - anchorPointer.y) > 3) {
+      anchorPointer.moved = true;
+    }
   }
 
   function onPointerUp() {
+    if (!enabled) return;
     if (!anchorPointer) return;
     anchorPointer.suppressClick = anchorPointer.moved || !!window.getSelection()?.toString().trim();
   }
 
   function onDocumentKeydown(event) {
+    if (!enabled) return;
     if (event.key !== "Enter" && event.key !== " ") return;
     const anchorElement = asElement(event.target)?.closest(".cgpt-thread-anchor");
     if (!anchorElement) return;
-    event.preventDefault();
+    stopEvent(event);
     openAnchorStack(anchorElement);
   }
 
   function openAnchorStack(anchorElement) {
-    const threadIds = anchorStack(anchorElement).flatMap((anchor) => anchor.childThreadIds);
-    const uniqueThreadIds = [...new Set(threadIds)].filter((threadId) => state.threads[threadId]);
+    const uniqueThreadIds = [...new Set(anchorStack(anchorElement).flatMap((anchor) => anchor.childThreadIds))]
+      .filter((threadId) => state.threads[threadId]);
     if (!uniqueThreadIds.length) return;
     if (uniqueThreadIds.length === 1) {
       activateThread(uniqueThreadIds[0]);
@@ -658,16 +719,10 @@
 
   function showThreadMenu(anchorElement, threadIds) {
     closeMenu();
-    menu = document.createElement("div");
-    menu.className = "cgpt-thread-menu";
+    menu = element("div", "cgpt-thread-menu");
     threadIds.forEach((threadId) => {
       const thread = state.threads[threadId];
-      if (!thread) return;
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = thread.title;
-      button.addEventListener("click", () => activateThread(threadId));
-      menu.append(button);
+      if (thread) menu.append(button("", () => activateThread(threadId), thread.title));
     });
     document.body.append(menu);
 
@@ -696,8 +751,7 @@
     const anchor = thread?.sourceAnchorId && state.anchors[thread.sourceAnchorId];
     if (!thread || thread.id === MAIN || !anchor || !isNativeContextButton(button, anchor)) return;
 
-    event.preventDefault();
-    event.stopPropagation();
+    stopEvent(event);
     activateThread(thread.parentThreadId || MAIN, anchor.id);
   }
 
@@ -708,11 +762,20 @@
 
     const buttonText = comparableText(button.innerText);
     const sourceText = comparableText(anchor.selectedText);
-    if (!buttonText || !sourceText) return false;
-    if (sourceText.includes(buttonText) || buttonText.includes(sourceText.slice(0, 30))) return true;
+    if (fuzzyTextMatch(sourceText, buttonText, 2, 1) || fuzzyTextMatch(buttonText, sourceText, 2, 1)) return true;
+    return !!button.querySelector(".line-clamp-3") && sharedTokenCount(sourceText, buttonText, 2) > 0;
+  }
 
-    const tokens = buttonText.split(/\s+/).filter((token) => token.length > 1);
-    return button.querySelector(".line-clamp-3") && tokens.some((token) => sourceText.includes(token));
+  function fuzzyTextMatch(haystack, needle, minTokenLength, minTokenHits) {
+    if (!haystack || !needle) return false;
+    if (haystack.includes(needle)) return true;
+    const head = needle.slice(0, 30);
+    if (head.length >= 8 && haystack.includes(head)) return true;
+    return sharedTokenCount(haystack, needle, minTokenLength) >= minTokenHits;
+  }
+
+  function sharedTokenCount(haystack, needle, minLength) {
+    return needle.split(/\s+/).filter((token) => token.length >= minLength && haystack.includes(token)).length;
   }
 
   function comparableText(text) {
@@ -733,31 +796,25 @@
 
   function scrollToAnchor(anchorId) {
     const anchorElement = document.querySelector('[data-cgpt-anchor-id="' + anchorId + '"]');
-    if (anchorElement) {
-      anchorElement.scrollIntoView({ block: "center", behavior: "smooth" });
-      return;
-    }
-
     const anchor = state.anchors[anchorId];
-    const entries = readTurns();
-    const entry = anchor && turnMap(entries).get(anchor.sourceTurnKey);
-    entry?.wrapper.scrollIntoView({ block: "center", behavior: "smooth" });
+    const entry = anchor && turnMap(readTurns()).get(anchor.sourceTurnKey);
+    scrollTo(anchorElement || entry?.wrapper);
   }
 
   function renderPanel() {
+    if (!enabled) {
+      cleanupDisabledUi();
+      return;
+    }
     panel ||= createPanel();
 
-    const hasThreads = state.threads[MAIN].childrenThreadIds.length > 0;
-    const shouldShow = hasThreads || state.activeThreadId !== MAIN;
-    if (!shouldShow) {
-      panel.classList.remove("is-open");
+    if (!panelHasContent()) {
+      closePanelTree();
       setTimeout(() => {
-        const hasThreadsNow = state.threads[MAIN].childrenThreadIds.length > 0;
-        if (hasThreadsNow || state.activeThreadId !== MAIN) return;
+        if (panelHasContent()) return;
         panel.classList.remove("is-visible");
         setTimeout(() => {
-          const stillEmpty = state.threads[MAIN].childrenThreadIds.length === 0;
-          if (stillEmpty && state.activeThreadId === MAIN) panel.hidden = true;
+          if (!panelHasContent()) panel.hidden = true;
         }, 340);
       }, 380);
       return;
@@ -771,39 +828,47 @@
     }
     updatePanelBottom();
 
-    const active = state.threads[state.activeThreadId] || state.threads[MAIN];
     panel.classList.toggle("is-open", panelOpen);
-
-    const toggle = panel.querySelector(".cgpt-thread-toggle");
-    const toggleLabel = document.createElement("span");
-    toggleLabel.className = "cgpt-thread-toggle-label";
-    toggleLabel.textContent = panelOpen ? "Hide" : "Thread";
-    toggle.replaceChildren(toggleLabel, threadTitleElement(active));
+    updatePanelToggleLabel();
 
     const tree = panel.querySelector(".cgpt-thread-tree");
     tree.replaceChildren();
     renderMainTree(tree);
   }
 
-  function createPanel() {
-    const element = document.createElement("div");
-    element.className = "cgpt-thread-panel";
-    element.hidden = true;
+  function panelHasContent() {
+    return state.threads[MAIN].childrenThreadIds.length > 0 || state.activeThreadId !== MAIN;
+  }
 
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "cgpt-thread-toggle";
-    toggle.addEventListener("click", () => {
+  function createPanel() {
+    const panelElement = element("div", "cgpt-thread-panel");
+    panelElement.hidden = true;
+    const toggle = button("cgpt-thread-toggle", () => {
       panelOpen = !panelOpen;
-      renderPanel();
+      if (panelOpen) {
+        renderPanel();
+      } else {
+        closePanelTree();
+      }
     });
 
-    const tree = document.createElement("div");
-    tree.className = "cgpt-thread-tree";
+    panelElement.append(toggle, element("div", "cgpt-thread-tree"));
+    document.body.append(panelElement);
+    return panelElement;
+  }
 
-    element.append(toggle, tree);
-    document.body.append(element);
-    return element;
+  function closePanelTree() {
+    panelOpen = false;
+    panel?.classList.remove("is-open");
+    updatePanelToggleLabel();
+  }
+
+  function updatePanelToggleLabel() {
+    const toggle = panel?.querySelector(".cgpt-thread-toggle");
+    if (!toggle) return;
+    const active = state.threads[state.activeThreadId] || state.threads[MAIN];
+    const toggleLabel = element("span", "cgpt-thread-toggle-label", panelOpen ? "Hide" : "Thread");
+    toggle.replaceChildren(toggleLabel, threadTitleElement(active));
   }
 
   function renderMainTree(root) {
@@ -815,31 +880,17 @@
     mainEntries.forEach((entry, index) => {
       if (entry.role !== "assistant") return;
       renderAnswerRow(root, entry, previousUserTitle(mainEntries, index), 1);
-      sourceChildThreads(MAIN, entry).forEach((threadId) => {
-        renderThreadRow(root, threadId, 2);
-      });
+      sourceChildThreads(MAIN, entry).forEach((threadId) => renderThreadRow(root, threadId, 2));
     });
 
     threadsWithoutVisibleSource(MAIN, entryByKey).forEach((threadId) => renderThreadRow(root, threadId, 1));
   }
 
   function renderAnswerRow(root, entry, title, depth) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "cgpt-thread-row cgpt-thread-answer";
-    button.style.paddingLeft = 8 + depth * 14 + "px";
-    button.addEventListener("click", () => {
-      state.activeThreadId = MAIN;
-      saveSoon();
-      scan();
-      setTimeout(() => entry.wrapper.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
-    });
-
-    const text = document.createElement("span");
-    text.className = "cgpt-thread-title";
-    text.textContent = title;
-    button.append(text);
-    root.append(button);
+    root.append(row("cgpt-thread-row cgpt-thread-answer", depth, () => {
+      activateThread(MAIN);
+      setTimeout(() => scrollTo(entry.wrapper), 80);
+    }, element("span", "cgpt-thread-title", title)));
   }
 
   function previousUserTitle(entries, assistantIndex) {
@@ -850,7 +901,7 @@
   }
 
   function sourceChildThreads(sourceThreadId, entry) {
-    const sourceKeys = new Set(entry.aliases || [entry.key]);
+    const sourceKeys = new Set(aliasesOf(entry));
     return [...new Set(Object.values(state.anchors)
       .filter((anchor) => anchor.sourceThreadId === sourceThreadId && sourceKeys.has(anchor.sourceTurnKey))
       .flatMap((anchor) => anchor.childThreadIds)
@@ -868,53 +919,64 @@
     const thread = state.threads[threadId];
     if (!thread) return;
 
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "cgpt-thread-row" + (threadId === state.activeThreadId ? " is-active" : "");
-    button.style.paddingLeft = 8 + depth * 14 + "px";
-    button.addEventListener("click", () => activateThread(threadId));
+    root.append(row(
+      "cgpt-thread-row" + (threadId === state.activeThreadId ? " is-active" : ""),
+      depth,
+      () => activateThread(threadId),
+      threadTitleElement(thread)
+    ));
 
-    button.append(threadTitleElement(thread));
-    root.append(button);
-
-    if (threadId !== MAIN) {
-      thread.childrenThreadIds.forEach((childId) => renderThreadRow(root, childId, depth + 1));
-    }
+    if (threadId !== MAIN) thread.childrenThreadIds.forEach((childId) => renderThreadRow(root, childId, depth + 1));
   }
 
   function threadTitleElement(thread) {
     const match = thread.id !== MAIN && thread.title.match(/^\[([^\]]+)]\s*(.*)$/);
     if (!match) {
-      const title = document.createElement("span");
-      title.className = "cgpt-thread-title";
-      title.textContent = thread.title;
-      return title;
+      return element("span", "cgpt-thread-title", thread.title);
     }
 
-    const title = document.createElement("span");
-    title.className = "cgpt-thread-title cgpt-thread-title-two-line";
-
-    const source = document.createElement("span");
-    source.className = "cgpt-thread-source";
-    source.textContent = "[" + match[1] + "]";
-
-    const question = document.createElement("span");
-    question.className = "cgpt-thread-question";
-    question.textContent = match[2] || "Thread";
-
+    const title = element("span", "cgpt-thread-title cgpt-thread-title-two-line");
+    const source = element("span", "cgpt-thread-source", "[" + match[1] + "]");
+    const question = element("span", "cgpt-thread-question", match[2] || "Thread");
     title.append(source, question);
     return title;
+  }
+
+  function row(className, depth, onClick, child) {
+    const item = button(className, onClick);
+    item.style.paddingLeft = 8 + depth * 14 + "px";
+    item.append(child);
+    return item;
+  }
+
+  function button(className, onClick, text) {
+    const item = element("button", className, text);
+    item.type = "button";
+    item.addEventListener("click", onClick);
+    return item;
+  }
+
+  function element(tag, className, text) {
+    const item = document.createElement(tag);
+    if (className) item.className = className;
+    if (text != null) item.textContent = text;
+    return item;
   }
 
   function updatePanelBottom() {
     if (!panel) return;
     const composer = document.querySelector("#thread-bottom-container");
-    if (!composer) {
-      panel.style.setProperty("--cgpt-thread-panel-bottom", "16px");
-      return;
-    }
-    const bottom = Math.max(16, window.innerHeight - composer.getBoundingClientRect().top + 12);
-    panel.style.setProperty("--cgpt-thread-panel-bottom", bottom + "px");
+    const bottom = composer ? Math.max(16, window.innerHeight - composer.getBoundingClientRect().top + 12) + "px" : "16px";
+    panel.style.setProperty("--cgpt-thread-panel-bottom", bottom);
+  }
+
+  function scrollTo(node) {
+    node?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  function stopEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function saveSoon() {
@@ -937,14 +999,18 @@
   }
 
   function buttonLabel(button) {
-    return [
-      button.textContent,
-      button.getAttribute("aria-label"),
-      button.getAttribute("title")
-    ].filter(Boolean).join(" ");
+    return [button.textContent, button.getAttribute("aria-label"), button.getAttribute("title")].filter(Boolean).join(" ");
+  }
+
+  function validColor(color) {
+    return /^#[0-9a-f]{6}$/i.test(color || "") ? color.toLowerCase() : "";
   }
 
   function asElement(target) {
     return target instanceof Element ? target : target?.parentElement || null;
+  }
+
+  function aliasesOf(entry) {
+    return entry.aliases || [entry.key];
   }
 })();

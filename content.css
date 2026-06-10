@@ -1,21 +1,33 @@
-.cgpt-thread-hidden {
+:root {
+  --cgpt-ease: cubic-bezier(0.37, 0, 0.63, 1);
+  --cgpt-border: color-mix(in srgb, var(--text-secondary, #555), transparent 58%);
+}
+
+.cgpt-thread-hidden,
+.cgpt-thread-panel[hidden] {
   display: none !important;
 }
 
 .cgpt-thread-anchor {
-  background: color-mix(in srgb, #2f7df6, transparent 84%);
-  border-bottom: 1px solid #2f7df6;
+  background: color-mix(in srgb, var(--cgpt-thread-anchor-color, #2f7df6), transparent 84%);
+  border-bottom: 1px solid var(--cgpt-thread-anchor-color, #2f7df6);
   border-radius: 3px;
   color: inherit;
   cursor: pointer;
   padding: 0 0.08em;
-  transition: background-color 220ms cubic-bezier(0.37, 0, 0.63, 1);
+  transition: background-color 220ms var(--cgpt-ease);
 }
 
-.cgpt-thread-anchor:hover,
-.cgpt-thread-anchor:focus {
-  background: color-mix(in srgb, #2f7df6, transparent 75%);
+.cgpt-thread-anchor:is(:hover, :focus) {
+  background: color-mix(in srgb, var(--cgpt-thread-anchor-color, #2f7df6), transparent 75%);
   outline: none;
+}
+
+.cgpt-thread-disabled .cgpt-thread-anchor {
+  background: transparent;
+  border-bottom: 0;
+  cursor: text;
+  padding: 0;
 }
 
 .cgpt-thread-panel {
@@ -23,7 +35,8 @@
   right: 16px;
   bottom: var(--cgpt-thread-panel-bottom, 120px);
   z-index: 40;
-  width: min(292px, calc(100vw - 32px));
+  width: 292px;
+  max-width: calc(100vw - 32px);
   max-height: 40vh;
   color: var(--text-primary, #111);
   font: 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -31,14 +44,7 @@
   pointer-events: none;
   transform: translateY(8px) scale(0.92);
   transform-origin: bottom right;
-  transition:
-    bottom 320ms cubic-bezier(0.37, 0, 0.63, 1),
-    opacity 260ms cubic-bezier(0.37, 0, 0.63, 1),
-    transform 340ms cubic-bezier(0.37, 0, 0.63, 1);
-}
-
-.cgpt-thread-panel[hidden] {
-  display: none !important;
+  transition: bottom 320ms var(--cgpt-ease), opacity 260ms var(--cgpt-ease), transform 340ms var(--cgpt-ease);
 }
 
 .cgpt-thread-panel.is-visible {
@@ -47,9 +53,8 @@
   transform: translateY(0) scale(1);
 }
 
-.cgpt-thread-toggle,
-.cgpt-thread-tree {
-  border: 1px solid color-mix(in srgb, var(--text-secondary, #555), transparent 58%);
+:is(.cgpt-thread-toggle, .cgpt-thread-tree, .cgpt-thread-menu) {
+  border: 1px solid var(--cgpt-border);
   background: var(--main-surface-primary, #fff);
 }
 
@@ -63,10 +68,7 @@
   overflow: hidden;
   padding: 0.5rem 0.75rem;
   text-align: left;
-  transition:
-    background-color 240ms cubic-bezier(0.37, 0, 0.63, 1),
-    border-color 240ms cubic-bezier(0.37, 0, 0.63, 1),
-    transform 240ms cubic-bezier(0.37, 0, 0.63, 1);
+  transition: background-color 240ms var(--cgpt-ease), border-color 240ms var(--cgpt-ease), transform 240ms var(--cgpt-ease);
 }
 
 .cgpt-thread-toggle:hover {
@@ -99,50 +101,49 @@
   transform: translateY(6px) scale(0.985);
   transform-origin: top right;
   transition:
-    max-height 380ms cubic-bezier(0.37, 0, 0.63, 1),
-    margin-top 340ms cubic-bezier(0.37, 0, 0.63, 1),
-    padding 340ms cubic-bezier(0.37, 0, 0.63, 1),
-    border-color 320ms cubic-bezier(0.37, 0, 0.63, 1),
-    opacity 300ms cubic-bezier(0.37, 0, 0.63, 1),
-    transform 340ms cubic-bezier(0.37, 0, 0.63, 1);
+    max-height 380ms var(--cgpt-ease), margin-top 340ms var(--cgpt-ease), padding 340ms var(--cgpt-ease),
+    border-color 320ms var(--cgpt-ease), opacity 300ms var(--cgpt-ease), transform 340ms var(--cgpt-ease);
 }
 
 .cgpt-thread-panel.is-open .cgpt-thread-tree {
-  border-color: color-mix(in srgb, var(--text-secondary, #555), transparent 58%);
+  border-color: var(--cgpt-border);
   margin-top: 0.5rem;
   max-height: calc(40vh - 42px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 0.35rem;
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0) scale(1);
 }
 
-.cgpt-thread-row {
-  align-items: center;
+:is(.cgpt-thread-row, .cgpt-thread-menu button) {
   background: transparent;
   border: 0;
   border-radius: 6px;
   color: inherit;
   cursor: pointer;
-  display: flex;
   font: inherit;
-  gap: 0.35rem;
-  min-height: 28px;
-  padding: 0.25rem 0.45rem;
   text-align: left;
-  transition:
-    background-color 220ms cubic-bezier(0.37, 0, 0.63, 1),
-    transform 220ms cubic-bezier(0.37, 0, 0.63, 1);
+  transition: background-color 220ms var(--cgpt-ease), transform 220ms var(--cgpt-ease);
   width: 100%;
 }
 
-.cgpt-thread-row:hover {
+.cgpt-thread-row {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0.25rem 0.45rem;
+}
+
+:is(.cgpt-thread-row, .cgpt-thread-menu button):hover {
   background: var(--main-surface-secondary, #f4f4f4);
   transform: translateX(2px);
 }
 
-.cgpt-thread-row:active {
+:is(.cgpt-thread-row, .cgpt-thread-menu button):active {
   transform: translateX(0) scale(0.99);
 }
 
@@ -156,20 +157,14 @@
   color: var(--text-secondary, #555);
 }
 
-.cgpt-thread-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .cgpt-thread-title-two-line {
   display: grid;
   gap: 1px;
   min-width: 0;
 }
 
-.cgpt-thread-source,
-.cgpt-thread-question {
+:is(.cgpt-thread-source, .cgpt-thread-question, .cgpt-thread-title) {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -182,10 +177,9 @@
 }
 
 .cgpt-thread-menu {
-  background: var(--main-surface-primary, #fff);
-  border: 1px solid color-mix(in srgb, var(--text-secondary, #555), transparent 58%);
   border-radius: 8px;
   color: var(--text-primary, #111);
+  font: 13px/1.3 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   max-width: min(260px, calc(100vw - 24px));
   padding: 0.25rem;
   position: fixed;
@@ -193,29 +187,9 @@
 }
 
 .cgpt-thread-menu button {
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  color: inherit;
-  cursor: pointer;
   display: block;
-  font: 13px/1.3 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow: hidden;
   padding: 0.45rem 0.55rem;
-  text-align: left;
   text-overflow: ellipsis;
-  transition:
-    background-color 220ms cubic-bezier(0.37, 0, 0.63, 1),
-    transform 220ms cubic-bezier(0.37, 0, 0.63, 1);
   white-space: nowrap;
-  width: 100%;
-}
-
-.cgpt-thread-menu button:hover {
-  background: var(--main-surface-secondary, #f4f4f4);
-  transform: translateX(2px);
-}
-
-.cgpt-thread-menu button:active {
-  transform: translateX(0) scale(0.99);
 }
